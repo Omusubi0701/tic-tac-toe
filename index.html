@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="ja">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+        <title>三目並べ P2P対戦 (手動SDP)</title>
+        <style>
+            body {
+                font-family: sans-serif;
+                max-width: 600px;
+                margin: 20px auto;
+            }
+            h1 {
+                text-align: center;
+            }
+            #board {
+                display: grid;
+                grid-template-columns: repeat(3, 100px);
+                gap: 5px;
+                justify-content: center;
+                margin: 20px 0;
+            }
+            .cell {
+                width: 100px;
+                height: 100px;
+                font-size: 48px;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                background: #eee;
+                cursor: pointer;
+                user-select: none;
+            }
+            .cell.locked {
+                cursor: not-allowed;
+                color: #aaa;
+            }
+            textarea {
+                width: 100%;
+                font-family: monospace;
+            }
+            button {
+                margin: 5px 0;
+                padding: 8px 16px;
+                font-size: 16px;
+            }
+            #status {
+                font-weight: bold;
+                text-align: center;
+                margin: 10px 0;
+            }
+            #restartBtn {
+                display: none;
+            }
+            #errorMsg {
+                color: red;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>三目並べ P2P対戦</h1>
+
+        <div>
+            <button id="createOfferBtn">ホストとして開始 (Offer)</button>
+            <button id="createAnswerBtn">ゲストとして接続 (Answer)</button>
+        </div>
+
+        <label>あなたの接続情報</label>
+        <button onclick="copyToClipboard()">コピー</button>
+        <textarea id="localSDP" rows="10" readonly></textarea>
+
+        <label>相手の接続情報をここに貼り付けてください</label>
+        <textarea id="remoteSDP" rows="10"></textarea>
+        <button id="setRemoteSDPBtn">接続情報をセット</button>
+        <div id="errorMsg"></div>
+
+        <div id="status">待機中...</div>
+        <div id="board" style="display: none"></div>
+        <button id="restartBtn">もう一度プレイ</button>
+
+        <script>
+            let pc,
+                dc,
+                isHost,
+                isMyTurn = false;
+            const board = document.getElementById('board');
+            const boardState = Array(9).fill(null);
+            const statusElem = document.getElementById('status');
+
+            function logError(msg) {
+                document.getElementById('errorMsg').textContent = msg;
+            }
+            function clearError() {
+                document.getElementById('errorMsg').textContent = '';
+            }
+
+            function copyToClipboard() {
+                const text = document.getElementById('localSDP').value;
+                if (!text) return alert('コピーする内容がありません');
+                navigator.clipboard
+                    .writeText(text)
+                    .then(() => alert('コピーしました！'));
+            }
+
+            function checkWin(b, p) {
+                const wins = [
+                    [0, 1, 2],
+                    [3, 4, 5],
+                    [6, 7, 8],
+                    [0, 3, 6],
+                    [1, 4, 7],
+                    [2, 5, 8],
+                    [0, 4, 8],
+                    [2, 4, 6],
+                ];
+                return wins.some((line) => line.every((i) => b[i] === p));
+            }
+            function checkDraw(b) {
+                return b.every((v) => v !== null);
+            }
+            function endGame() {
+                isMyTurn = false;
+                [...board.children].forEach((c) => c.classList.add('locked'));
+                document.getElementById('restartBtn').style.display =
+                    'inline-block';
+            }
+
+            function initBoard() {
+                board.innerHTML = '';
+                for (let i = 0; i < 9; i++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.dataset.index = i;
+                    cell.addEventListener('click', onCellClick);
+                    board.appendChild(cell);
+                    boardState[i] = null;
+                }
+                board.style.display = 'grid';
+                updateBoard();
+            }
+
+            function updateBoard() {
+                for (let i = 0; i < 9; i++) {
+                    const cell = board.children[i];
+                    cell.textContent = boardState[i] || '';
+                    cell.classList.toggle(
+                        'locked',
+                        !isMyTurn || boardState[i] !== null
+                    );
+                }
+            }
+
+            function onCellClick(e) {
+                if (!isMyTurn) return;
+                const i = +e.currentTarget.dataset.index;
+                if (boardState[i]) return;
+                boardState[i] = isHost ? 'X' : 'O';
+                updateBoard();
+                dc.send(JSON.stringify({ type: 'move', index: i }));
+                if (checkWin(boardState, boardState[i])) {
+                    statusElem.textContent = 'あなたの勝ち！';
+                    endGame();
+                    return;
+                }
+                if (checkDraw(boardState)) {
+                    statusElem.textContent = '引き分けです';
+                    endGame();
+                    return;
+                }
+                isMyTurn = false;
+                statusElem.textContent = '相手のターンです';
+            }
+
+            function handleRemoteMove(i) {
+                boardState[i] = isHost ? 'O' : 'X';
+                updateBoard();
+                if (checkWin(boardState, boardState[i])) {
+                    statusElem.textContent = '相手の勝ち！';
+                    endGame();
+                    return;
+                }
+                if (checkDraw(boardState)) {
+                    statusElem.textContent = '引き分けです';
+                    endGame();
+                    return;
+                }
+                isMyTurn = true;
+                statusElem.textContent = 'あなたのターンです';
+            }
+
+            document.getElementById('restartBtn').onclick = () => {
+                for (let i = 0; i < 9; i++) boardState[i] = null;
+                initBoard();
+                statusElem.textContent = isMyTurn
+                    ? 'あなたのターンです'
+                    : '相手のターンです';
+                document.getElementById('restartBtn').style.display = 'none';
+            };
+
+            document.getElementById('createOfferBtn').onclick = async () => {
+                isHost = true;
+                setupPeer(true);
+            };
+
+            document.getElementById('createAnswerBtn').onclick = () => {
+                isHost = false;
+                setupPeer(false);
+            };
+
+            document.getElementById('setRemoteSDPBtn').onclick = async () => {
+                clearError();
+                const text = document.getElementById('remoteSDP').value.trim();
+                if (!text) return logError('接続情報が空です');
+                let desc;
+                try {
+                    desc = JSON.parse(text);
+                    if (!desc.sdp || !desc.type) throw '不正な形式';
+                } catch {
+                    return logError(
+                        'JSON形式が壊れています。全体をコピーして貼り付けてください。'
+                    );
+                }
+                try {
+                    await pc.setRemoteDescription(desc);
+                    if (!isHost) {
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        document.getElementById('localSDP').value =
+                            JSON.stringify(pc.localDescription, null, 2);
+                        statusElem.textContent =
+                            'Answer を生成しました。送ってください。';
+                    } else {
+                        statusElem.textContent = '接続を待機しています...';
+                    }
+                } catch (e) {
+                    logError('SDPの設定に失敗しました: ' + e);
+                }
+            };
+
+            function setupPeer(isOffer) {
+                pc = new RTCPeerConnection({
+                    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+                });
+
+                pc.onicecandidate = (e) => {
+                    if (!e.candidate && pc.localDescription) {
+                        document.getElementById('localSDP').value =
+                            JSON.stringify(pc.localDescription, null, 2);
+                    }
+                };
+
+                pc.ondatachannel = (e) => {
+                    dc = e.channel;
+                    bindChannel();
+                };
+
+                if (isOffer) {
+                    dc = pc.createDataChannel('game');
+                    bindChannel();
+                    pc.createOffer().then((d) => pc.setLocalDescription(d));
+                    statusElem.textContent =
+                        'Offer を作成しました。送ってください。';
+                }
+            }
+
+            function bindChannel() {
+                dc.onopen = () => {
+                    statusElem.textContent = isHost
+                        ? 'あなたのターンです'
+                        : '相手のターンです';
+                    isMyTurn = isHost;
+                    initBoard();
+                };
+                dc.onmessage = (e) => {
+                    const msg = JSON.parse(e.data);
+                    if (msg.type === 'move') handleRemoteMove(msg.index);
+                };
+                dc.onclose = () =>
+                    (statusElem.textContent = '接続が切れました');
+            }
+        </script>
+    </body>
+</html>
